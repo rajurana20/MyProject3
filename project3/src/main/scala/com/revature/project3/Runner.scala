@@ -1,32 +1,31 @@
 package com.revature.project3
 
 import org.apache.spark.sql.SparkSession
-import org.json4s._
-import org.json4s.jackson.JsonMethods._
+import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.functions
-import java.io.PrintWriter
+import org.apache.spark.sql.types.IntegerType
+import com.google.flatbuffers.Struct
+import org.apache.spark.sql.types.StructField
 import org.apache.spark.sql.Row
-import org.apache.spark.sql.expressions.Window
-import org.apache.spark.sql.catalyst.expressions.aggregate.Sum
-//import org.archive.io.ArchiveReader;
-// import org.archive.io.ArchiveRecord;
-// import org.archive.io.warc.WARCReaderFactory;
-import org.jets3t.service.S3Service;
-import org.jets3t.service.S3ServiceException;
-import org.jets3t.service.impl.rest.httpclient.RestS3Service;
-import org.jets3t.service.model.S3Object;
-import org.apache.commons.net.ntp.TimeStamp
-
-
+import scala.io.BufferedSource
+import java.io.FileInputStream
+import org.apache.spark.sql.functions.split
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.functions.round 
+import java.util.Arrays
+import java.sql
+import org.apache.parquet.format.IntType
+import org.apache.spark.sql.types.DoubleType
+import org.apache.spark.sql.types.LongType
 
 object Runner {
-  
   def main(args: Array[String]): Unit = {
-    implicit def formats = DefaultFormats
     val spark = SparkSession
       .builder()
       .appName("scalas3read")
       .master("local[4]")
+      // .config("spark.debug.maxToStringFields", 100)
       .getOrCreate()
 
     // Reference: https://sparkbyexamples.com/spark/spark-read-text-file-from-s3/#s3-dependency
@@ -40,125 +39,63 @@ object Runner {
     import spark.implicits._
     spark.sparkContext.setLogLevel("WARN")
 
-    val rddFromFile = spark.read.parquet( "s3a://commoncrawl/cc-index/table/cc-main/warc/crawl=CC-MAIN-2021-04/subset=warc/part-00298-364a895c-5e5c-46bb-846e-75ec7de82b3b.c000.gz.parquet" );
-    rddFromFile.printSchema();
-    import org.apache.spark.sql.functions.udf
+    //Read WET data from the Common Crawl s3 bucket
+    //Since WET is read in as one long text file, use lineSep to split on each header of WET record
+    val fileName = "s3a://commoncrawl/crawl-data/CC-MAIN-2021-04/segments/1610703506640.22/wet/CC-MAIN-20210116104719-20210116134719-00799.warc.wet.gz"
+    val commonCrawl = spark.read.option("lineSep", "WARC/1.0").text(fileName)
+    .as[String]
+    .map((str)=>{str.substring(str.indexOf("\n")+1)})
+    .toDF("cut WET")
 
-    def checkIsTechJob(fileName : String, url : String):Boolean={
-    //   val spark2 = SparkSession
-    //   .builder()
-    //   .appName("scalas3read")
-    //   .master("local[4]")
-    //   .getOrCreate()
-
-    //   import spark2.implicits._
-    //   spark2.sparkContext.setLogLevel("WARN")
-
-    //   val df2 = spark2.sparkContext.textFile(s"s3a://commoncrawl/$fileName").zipWithIndex().toDF()
-    //   val start = df2.select("_2").where($"_1".contains(s"WARC-Target-URI: $url")).collect()
-    //   val startInt = start(0).toString().substring(1,start(0).toString().length()-1).toInt
-
-    //   val end = df2.filter($"_2" > startInt && $"_1"==="WARC/1.0").select($"_2")collect()
-    //   val endInt = end(0).toString().substring(1,end(0).toString().length()-1).toInt
- 
-    //   val df4=df2.filter($"_2".between(startInt,endInt))
-    //   val isItTech=df4.filter($"_2".rlike("sofware")).isEmpty
-    
-    //  // println(isItTech);
-   
-    //   if(isItTech) 0 else 1;
-
-    true
-    }
-
-    def checkIsEntryTechJob(fileName : String, url : String):Boolean={
-      // val df2 = spark.sparkContext.textFile(s"s3a://commoncrawl/$fileName").zipWithIndex()
-      // val df3 = df2.toDF()
-        
-      // val start = df3.select("_2").where($"_1"===s"WARC-Target-URI: ${url}").collect()
-      // val startInt = start(0).toString().substring(1,start(0).toString().length()-1).toInt
-
-      // val end = df3.filter($"_2" > startInt && $"_1"==="WARC/1.0").select($"_2")collect()
-      // val endInt = end(0).toString().substring(1,end(0).toString().length()-1).toInt
- 
-      // val df4=df3.filter($"_2".between(startInt,endInt))
-      // val isItTechEntry=df4.filter($"_2".contains("Entry Level","fresher")).isEmpty
-    
-      // isItTechEntry
-
-      true;
-  }
-
-    val isTechJob = udf((fileName : String, url : String)=> checkIsTechJob(fileName,url))
-    val isEntryTechJob = udf((fileName : String, url : String)=> checkIsEntryTechJob(fileName,url))
-
-    spark.udf.register("isTechJob", isTechJob)
-    spark.udf.register("isEntryTechJob", isEntryTechJob)
-    
-    rddFromFile.createTempView("temp");
-    val query =spark.sql("SELECT url_host_name, url, warc_filename, isTechJob(warc_filename,url) as is_tech_job, isEntryTechJob(warc_filename,url) as is_entry_tech_job from temp where url_path like '%job%'");
-    //val query =spark.sql("SELECT url_host_name, url, warc_filename as content from temp where url_path like '%job%'");
-    //val query =spark.sql("SELECT url_host_name, count(*) as n FROM temp WHERE url_path like '%job%' group by 1 order by n desc limit 200");
-    query.take(1).foreach(println)
-    query.show();
-    //checkIsTechJob("crawl-data/CC-MAIN-2021-04/segments/1610703519923.26/warc/CC-MAIN-20210120054203-20210120084203-00078.warc.gz","https://servlife.org/executive-assistant-job-description/")
-
+    // Splitting the header WARC data from the plain text content for WET files
+    val cuttingCrawl = commonCrawl
+      .withColumn("_tmp", split($"cut WET", "\r\n\r\n"))
+      .select($"_tmp".getItem(0).as("WARC Header"), $"_tmp".getItem(1).as("Plain Text"))
   
+    // Below is filtering for only Tech Jobs
+    // First filter for URI's with career/job/employment
+    // Second filter makes sure all results returned have keys words for tech jobs
+    // This filters out non tech related jobs hat return from job in URI
+    val filterCrawl = cuttingCrawl
+      .filter(($"WARC Header" rlike ".*WARC-Target-URI:.*career.*" 
+        or ($"WARC Header" rlike ".*WARC-Target-URI:.*/job.*") 
+        or ($"WARC Header" rlike ".*WARC-Target-URI:.*employment.*"))
+      and(($"Plain Text" rlike ".*Frontend.*")
+       or ($"Plain Text" rlike ".*Backend.*") 
+       or ($"Plain Text" rlike ".*Fullstack.*")
+       or ($"Plain Text" rlike ".*Cybersecurity.*") 
+       or ($"Plain Text" rlike ".*Software.*") 
+       or($"Plain Text" rlike ".*Computer.*")))
+      .withColumn("is_entry_tech_job",($"Plain Text" rlike ".*entry.*" or ($"Plain Text" rlike ".*junior.*")))
+      .withColumn("is_experience_required",($"Plain Text" rlike ".*experience.*"))
+      .select($"WARC Header",$"is_entry_tech_job",$"is_experience_required")
+      var cachedFilterCrawl=filterCrawl.persist();
+      cachedFilterCrawl.show(50);
 
-  def myTesting(fileName : String, url : String)={
-    // val df2 = spark.sparkContext.textFile(s"s3a://commoncrawl/$fileName").zipWithIndex()
-    // val df3 = df2.toDF()
-    // println(s"WARC-Target-URI: ${url}")
+      val totalTechJob = cachedFilterCrawl.count();
+      println("Total Tech Job: "+ totalTechJob)
+      val totalEntryLevelTechJob = cachedFilterCrawl.filter($"is_entry_tech_job").count()
+      println("Total Entry Level Tech jobs: " + totalEntryLevelTechJob)
+      val totalEntryLevelTechJobRequiredExperience = cachedFilterCrawl.filter($"is_entry_tech_job" && $"is_experience_required").count()
+      println("Total Entry Level Tech Jobs That required experience : " + totalEntryLevelTechJobRequiredExperience)
+      val percentage = totalEntryLevelTechJobRequiredExperience.toDouble/totalTechJob * 100;
+      println("Percentage: " + percentage  + " %")
 
-    // val start = df3.select("_2").where($"_1".contains(s"WARC-Target-URI: ${url}")).collect()
 
-    // if (start.take(1).isEmpty)
-    // {
-    //   println("Not Found")
-    // }
-    // else{
-    //   val startInt = start(0).toString().substring(1,start(0).toString().length()-1).toInt
+     val simpleData = Seq(Row(fileName,totalTechJob,totalEntryLevelTechJob,totalEntryLevelTechJobRequiredExperience,percentage))
 
-    // val end = df3.filter($"_2" > startInt && $"_1"==="WARC/1.0").select($"_2")collect()
-    // val endInt = end(0).toString().substring(1,end(0).toString().length()-1).toInt
- 
-    // val df4=df3.filter($"_2".between(startInt,endInt))
-    // df4.show(100,false)
-    // }
-    
-  }
-    
-  }
+    val simpleSchema = StructType(Array(
+      StructField("fileName",StringType,true),
+      StructField("totalTechJob",LongType,true),
+      StructField("totalEntryLevelTechJob",LongType,true),
+      StructField("totalEntryLevelTechJobRequiredExperience", LongType, true),
+      StructField("percentage", DoubleType, true)
+    ))
+
+    val dfToWrite = spark.createDataFrame(spark.sparkContext.parallelize(simpleData),simpleSchema)
+    dfToWrite.write.mode("append").csv("s3a://rajusecondbucket/crawlresult/")
   
+    cachedFilterCrawl.unpersist()
+  }
 
-   case class ColumnarClass (
- url_surtkey: String,
- url: String,
- url_host_name: String,
- url_host_tld: String,
- url_host_2nd_last_part: String,
- url_host_3rd_last_part: String,
- url_host_4th_last_part: String,
- url_host_5th_last_part: String,
- url_host_registry_suffix: String,
- url_host_registered_domain: String,
- url_host_private_suffix: String,
- url_host_private_domain: String,
- url_protocol: String,
- url_port: Int,
- url_path: String,
- url_query: String,
- fetch_time: String,
- fetch_status: Int,
- fetch_redirect: String,
- content_digest: String,
- content_mime_type: String,
- content_mime_detected: String,
- content_charset: String,
- content_languages: String,
- content_truncated: String,
- warc_filename: String,
- warc_record_offset: Int,
- warc_record_length: Int,
- warc_segment: String){}
 }
